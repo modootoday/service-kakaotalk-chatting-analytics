@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="referrer" content="always">
+    <meta name="robots" content="noindex,nofollow">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+    <title>모두의오늘 서비스 - 카카오톡 채팅내역 분석</title>
+    <style>
+      html, body {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+      }
+      .fs-7 { font-size: 0.8rem; }
+      .fs-8 { font-size: 0.6rem; }
+
+      #container.disabled { pointer-events: none; opacity: 0.5; }
+      .canvas { cursor: pointer; }
+    </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.2.1/css/bootstrap.min.css" referrerpolicy="no-referrer" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.2.1/js/bootstrap.min.js" referrerpolicy="no-referrer"></script>
+    <script>document.addEventListener('contextmenu', event => event.preventDefault());</script>
+  </head>
+  <body class="bg-dark text-light">
+    <div id="container" class="container shadow rounded my-5 disabled">
+      <div class="p-3">
+        <p class="mb-5">&copy; <a href="https://modoo.today" target="_blank" class="text-light">모두의오늘</a></p>
+        <h1 class="h4 text-center mb-1">카카오톡 채팅내역 분석</h1>
+        <form id="generator">
+          <div class="card bg-light text-dark shadow mb-3">
+            <div class="card-header">분석 설정</div>
+            <div class="card-body">
+              <input class="mb-1 form-control" type="file" name="file" />
+              <input class="mb-1 form-control" type="date" name="init" />
+              <input class="mb-1 form-control" type="date" name="ends" />
+              <button class="btn btn-primary w-100" type="submit">구분선 만들기</button>
+            </div>
+          </div>
+          <div class="card bg-light text-dark shadow mb-3">
+            <div class="card-header">분석 결과</div>
+            <div class="card-body" id="result">
+
+            </div>
+            <div class="card-footer">
+              <small>이미지를 클릭하여 저장 후, GitHub 등에 업로드 하여 사용하세요.</small>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+    <script type="module">
+      import _ from "https://cdn.skypack.dev/lodash@4.17.21";
+      import Promise from "https://cdn.skypack.dev/bluebird@3.7.2";
+      import Moment from "https://cdn.skypack.dev/moment-timezone@0.5.39";
+      import format from "https://cdn.skypack.dev/format@0.2.2";
+      Moment.tz.setDefault("Asia/Seoul");
+      // -----------------------
+      const MESSAGE_DATETIME = /^[\-]+ (?<YEAR>[\d]+)년 (?<MONTH>[\d]+)월 (?<DATE>[\d]+)일 (?<DAY>[월화수목금토일])요일 [\-]+$/i;
+      const MESSAGE_USERJOIN = /^(?<NICKNAME>.*)님이 들어왔습니다\.$/i;
+      const MESSAGE_USEREXIT = /^(?<NICKNAME>.*)님이 나갔습니다\.$/i;
+      const MESSAGE_USERKICK = /^(?<NICKNAME>.*)님을 내보냈습니다\.$/i;
+      const MESSAGE_ERASERED = /^채팅방 관리자가 메시지를 가렸습니다.$/i;
+      const MESSAGE_BLOCK = /^\[(?<NICKNAME>[^\]]*)\] \[(?<AMPM>(오전|오후)) (?<HOUR>[\d]+):(?<MINUTE>[\d]+)\] (?<MESSAGE>.*?)$/i;
+      // -----------------------
+      async function read_text(text) {
+        const buffer = {};
+        const stores = {}; stores.members = {}; stores.messages = []; stores.lasttime;
+        const reader = text.split(/[\r\n]+/g);
+        for await (const line of reader) {
+          buffer.msgblock = MESSAGE_BLOCK.exec(line);
+          buffer.datetime = MESSAGE_DATETIME.exec(line) || buffer.datetime;
+          buffer.userjoin = MESSAGE_USERJOIN.exec(line);
+          buffer.userexit = MESSAGE_USEREXIT.exec(line);
+          buffer.userkick = MESSAGE_USERKICK.exec(line);
+          buffer.erasered = MESSAGE_ERASERED.exec(line);
+          if(0) {}
+          else if(buffer.erasered) {}
+          else if(buffer.userjoin) {
+            const { NICKNAME } = buffer.userjoin.groups;
+            if(!_.has(stores.members, NICKNAME)) {
+              _.set(stores.members, `${NICKNAME}.name`, NICKNAME);
+              _.set(stores.members, `${NICKNAME}.joined_at`, stores.lasttime);
+            }
+            _.unset(stores.members, `${NICKNAME}.exited_at`);
+          }
+          else if(buffer.userexit) {
+            const { NICKNAME } = buffer.userexit.groups;
+            _.set(stores.members, `${NICKNAME}.exited_at`, stores.lasttime);
+          }
+          else if(buffer.userkick) {
+            const { NICKNAME } = buffer.userkick.groups;
+            _.set(stores.members, `${NICKNAME}.kicked_at`, stores.lasttime);
+            _.set(stores.members, `${NICKNAME}.exited_at`, stores.lasttime);
+          }
+          else {
+            const { YEAR, MONTH, DATE, DAY } = buffer.datetime ? buffer.datetime.groups : {};
+            const { AMPM, HOUR, MINUTE, NICKNAME, MESSAGE } = buffer.msgcache = _.defaults(buffer.msgblock ? buffer.msgblock.groups : { MESSAGE: line }, buffer.msgcache);
+
+            const DATETIME = Moment().set({ year: YEAR, month: MONTH - 1, date: DATE, hour: parseInt(HOUR) + (AMPM == '오전' ? 0 : 12), minute: MINUTE }).toDate();
+            if(DATETIME) { stores.lasttime = DATETIME }
+            if(_.trim(MESSAGE)) {
+              stores.messages.push({ DATETIME, NICKNAME, MESSAGE });
+              _.unset(stores.members, `${NICKNAME}.exited_at`);
+            }
+          }
+        }
+        return stores;
+      }
+      async function find_by_nickname(name) {
+      }
+      async function group_by_user(stores, sdate, edate) {
+        const { messages, members } = stores;
+        const groups_messages = _.filter(messages, (msg) => Moment(msg.DATETIME).isBetween(sdate, edate));
+        const groups = _.groupBy(groups_messages, ({ NICKNAME }) => NICKNAME);
+        const groups_array = _.map(groups, (messages, nickname)=>[ messages, nickname ]);
+        const result = await Promise.mapSeries(groups_array, async ([ messages, nickname ]) => {
+          const contains = _.has(stores.members, nickname), { joined_at, kicked_at, exited_at } = _.get(stores.members, nickname, {});
+          const joined = !!joined_at, kicked = !!kicked_at, exited = !!exited_at;
+          const last = _.last(messages), last_message = last.MESSAGE, last_message_at = last.DATETIME;
+
+          const namerule = Object.assign({}, _.get(/^(?<name>(?<type>[\@\+])?[^\(]+)(?<opts>.*?)$/.exec(nickname), 'groups', {}));
+          const nametype = _.trim(namerule.type);
+          const nameopts = _.trim(namerule.opts);
+          const realname = namerule.name || nickname, is_infl = realname.includes('@'), is_corp = realname.includes('+'), is_violation = !namerule || (!is_infl && !is_corp && !nameopts);
+          const infldata = is_infl && await find_by_nickname(realname), realinfl = _.size(infldata) ? true : undefined;
+
+          const text_lines = messages.length;
+          const text_chars = _.reduce(messages, (length, message)=>length+=message.MESSAGE.length, 0);
+          const text_trims = _.reduce(messages, (length, message)=>length+=message.MESSAGE.replace(/\s/g, '').length, 0);
+
+          const like_post_count = (text_trims / 2000).toFixed(6);
+
+          return {
+            contains, nickname, nametype, nameopts, realname,
+            // mesages
+            text_chars, text_trims, text_lines, messages,
+            like_post_count,
+            // contidion
+            is_infl, is_corp, is_violation,
+            // data
+            infldata, realinfl,
+            // status
+            joined, joined_at,
+            kicked, kicked_at, 
+            exited, exited_at,
+            last_message: _.truncate(last_message, { length: 32 }),
+            last_message_at,
+          };
+        });
+        return _.orderBy(result, ['text_chars', 'text_lines'], ['desc', 'desc']).map((data, offset)=>({ rank: offset + 1, ...data }));
+      }
+      // -----------------------
+      async function readFile(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsText(file);
+        });
+      }
+      async function console_reset() {
+        const draw = document.getElementById('result'); if(!draw) return;
+        draw.innerHTML = '';
+      }
+      async function console_log(pattern, ...params) {
+        const draw = document.getElementById('result'); if(!draw) return;
+        const elem = document.createElement('div');
+        elem.textContent = (pattern.includes('%s')) ? format(pattern, ...params) : [pattern, ...params].join(' ');
+        draw.append(elem);
+      }
+      async function console_table(dataset, columns = []) {
+        const draw = document.getElementById('result'); if(!draw) return;
+        const wrapper = document.createElement('div'); draw.append(wrapper); wrapper.classList.add('table-responsive');
+        const table = document.createElement('table'); wrapper.append(table); table.classList.add('table', 'table-striped');
+        const thead = document.createElement('thead'); table.append(thead);
+        const thead_row = document.createElement('tr'); thead.append(thead_row);
+        for(const column of columns) {
+          const thead_col = document.createElement('th');
+          thead_row.append(thead_col);
+          thead_col.textContent = column
+        }
+        const tbody = document.createElement('tbody'); table.append(tbody);
+        for(const row of dataset) {
+          const tbody_row = document.createElement('tr'); tbody.append(tbody_row);
+          const values = columns.map(colname=>row[colname]);
+          for(const col of values) {
+            const tbody_col = document.createElement('td');
+            tbody_row.append(tbody_col);
+            tbody_col.textContent = (_.isDate(col)) ? Moment(col).format('YYYY-MM-DD HH:mm:ss') : col;
+          }
+        }
+      }
+      async function main() {
+        try {
+          const view = document.querySelector('#container'); if(!view) return;
+          const form = document.querySelector('#generator'); if(!form) return;
+          view.classList.toggle('disabled', true);
+          form.init.oninput = () => localStorage.setItem('init', form.init.value);
+          form.init.value = localStorage.getItem('init') || Moment().subtract(28, 'days').format('YYYY-MM-DD');
+          form.ends.oninput = () => localStorage.setItem('ends', form.ends.value);
+          form.ends.value = localStorage.getItem('ends') || Moment().format('YYYY-MM-DD');
+          form.onsubmit = async (e) => {
+            view.classList.toggle('disabled', true);
+            if(e && e.preventDefault) e.preventDefault();
+            console_reset();
+            const text = await readFile(form.file.files[0]);
+            const stores = await read_text(text);
+            console_log('누적입장인원', _.size(_.filter(stores.members, m =>  m.joined_at)), '명');
+            console_log('누적강퇴인원', _.size(_.filter(stores.members, m =>  m.kicked_at)), '명');
+            console_log('현재입장인원', _.size(_.filter(stores.members, m => !m.exited_at)), '명');
+            let sdate = Moment(form.init.value);
+            let edate = Moment(form.ends.value);
+            let analytics = await group_by_user(stores, sdate, edate);
+            let analytics_infl = analytics.filter(o=>o.is_infl);
+            let analytics_corp = analytics.filter(o=>o.is_corp);
+            let analaytic_each = analytics.filter(o=>o.is_violation);
+            console_log('집계기간', sdate.format('YYYY-MM-DD'), '~', edate.format('YYYY-MM-DD'), `(${edate.diff(sdate, 'days')}일 간)`);
+            console_log('집계대상', _.size(analytics), '명');
+            console_log('총글자수', _.reduce(analytics, (r, o)=>r+=o.text_chars, 0), '자');
+            console_table(analytics, ['rank', 'nickname', 'text_trims', 'text_lines', 'last_message_at', 'joined_at', 'kicked_at', 'exited_at']);
+            view.classList.toggle('disabled', false);
+          };
+          view.classList.toggle('disabled', false);
+        }catch(e) {
+          console.error(e);
+        }
+      }
+      main();
+    </script>
+  </body>
+</html>
